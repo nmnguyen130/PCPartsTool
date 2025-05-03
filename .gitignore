@@ -1,0 +1,40 @@
+# Web cache
+.vscode/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+dist/
+*.egg-info/
+
+# Environments
+pcpart_env/
+
+# Data directories
+data/
+dataset/
+
+# Model checkpoints and saved models
+*.pth
+*.pt
+*.h5
+*.ckpt
+*.model
+*.rar
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Processed data files
+*.npz
+*.npy
+*.pkl
+
+# Image
+*.png
