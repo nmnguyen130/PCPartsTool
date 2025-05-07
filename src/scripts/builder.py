@@ -1,3 +1,4 @@
+from collections import defaultdict
 import itertools
 import pandas as pd
 import os
@@ -177,66 +178,70 @@ class PCBuilder:
         allowed = self.purpose_mapping[purpose]
 
         def top_components(components, key, n):
-            filtered = [c for c in components if c.purpose in allowed[key]]
-            return sorted(filtered, key=lambda x: x.performance_score, reverse=True)[:n]
+            return sorted(
+                [c for c in components if c.purpose in allowed[key]],
+                key=lambda x: x.performance_score / x.price,  # Tối ưu hiệu năng/giá
+                reverse=True
+            )[:n]
 
-        # Filter top CPUs and motherboards with matching sockets
+        # Nhóm linh kiện theo socket và ddr_type để giảm kiểm tra tương thích
+        mb_by_socket = defaultdict(list)
+        ram_by_ddr = defaultdict(list)
+        for mb in self.motherboards:
+            if mb.purpose in allowed['motherboard']:
+                mb_by_socket[mb.socket].append(mb)
+        for ram in self.rams:
+            if ram.purpose in allowed['ram']:
+                ram_by_ddr[ram.ddr_type].append(ram)
+
+        # Lấy top linh kiện
         top_cpus = top_components(self.cpus, 'cpu', top_n)
-        top_mbs = [mb for mb in top_components(self.motherboards, 'motherboard', top_n * 2)
-                   if any(mb.socket == cpu.socket for cpu in top_cpus)]
-        top_cpus = [cpu for cpu in top_cpus if any(cpu.socket == mb.socket for mb in top_mbs)]
-
-        # Filter top RAMs compatible with motherboards
-        top_rams = [ram for ram in top_components(self.rams, 'ram', top_n * 2)
+        top_mbs = [mb for mb in top_components(self.motherboards, 'motherboard', top_n)
+                if any(cpu.socket == mb.socket for cpu in top_cpus)]
+        top_rams = [ram for ram in top_components(self.rams, 'ram', top_n)
                     if any(ram.ddr_type in mb.memory_type for mb in top_mbs)]
-
         top_storages = top_components(self.storages, 'storage', top_n)
         top_gpus = top_components(self.gpus, 'gpu', top_n)
         top_keyboards = top_components(self.keyboards, 'keyboard', top_n)
         top_mice = top_components(self.mice, 'mouse', top_n)
 
-        best_config = None
-        best_score = -1
+        # Tối ưu hóa tổ hợp bằng cách nhóm theo socket và ddr_type
+        best_configs = []
+        for cpu in top_cpus:
+            compatible_mbs = mb_by_socket[cpu.socket]
+            for mb in compatible_mbs:
+                compatible_rams = [ram for ram in top_rams if ram.ddr_type in mb.memory_type]
+                for ram, storage, gpu, keyboard, mouse in itertools.product(
+                    compatible_rams, top_storages, top_gpus, top_keyboards, top_mice
+                ):
+                    total_price = cpu.price + mb.price + ram.price + storage.price + \
+                                gpu.price + keyboard.price + mouse.price
+                    if total_price > budget:
+                        continue
 
-        for cpu, mb, ram, storage, gpu, keyboard, mouse in itertools.product(
-                top_cpus, top_mbs, top_rams, top_storages, top_gpus, top_keyboards, top_mice):
+                    total_score = (
+                        cpu.performance_score + mb.performance_score + ram.performance_score +
+                        storage.performance_score + gpu.performance_score +
+                        keyboard.performance_score + mouse.performance_score
+                    )
 
-            if cpu.socket != mb.socket or ram.ddr_type not in mb.memory_type:
-                continue
+                    best_configs.append({
+                        "cpu": cpu, "motherboard": mb, "ram": ram, "storage": storage,
+                        "gpu": gpu, "keyboard": keyboard, "mouse": mouse,
+                        "total_price": total_price, "total_performance_score": total_score
+                    })
 
-            total_price = sum([
-                cpu.price, mb.price, ram.price, storage.price,
-                gpu.price, keyboard.price, mouse.price
-            ])
+        # Sắp xếp theo hiệu năng/giá và lấy cấu hình tốt nhất
+        if not best_configs:
+            return {"error": "Không tìm được cấu hình hợp lệ trong ngân sách."}
 
-            if total_price > budget:
-                continue
+        best_config = max(best_configs, key=lambda x: x["total_performance_score"] / x["total_price"])
 
-            total_score = sum([
-                cpu.performance_score, mb.performance_score, ram.performance_score,
-                storage.performance_score, gpu.performance_score,
-                keyboard.performance_score, mouse.performance_score
-            ])
-
-            if total_score > best_score:
-                best_score = total_score
-                best_config = {
-                    "cpu": cpu,
-                    "motherboard": mb,
-                    "ram": ram,
-                    "storage": storage,
-                    "gpu": gpu,
-                    "keyboard": keyboard,
-                    "mouse": mouse,
-                    "total_price": total_price,
-                    "total_performance_score": total_score
-                }
-
-        if not best_config:
-            return {"error": "No valid configuration found within budget."}
-
-        # Return summarized result
+        # Trả về kết quả ngắn gọn
         return {
             k: {"name": v.name, "price": v.price, "performance_score": v.performance_score}
-            for k, v in best_config.items() if k != "total_price" and k != "total_performance_score"
-        } | {"total_price": best_config['total_price'], "total_performance_score": best_config['total_performance_score']}
+            for k, v in best_config.items() if k not in ["total_price", "total_performance_score"]
+        } | {
+            "total_price": best_config["total_price"],
+            "total_performance_score": best_config["total_performance_score"]
+        }
