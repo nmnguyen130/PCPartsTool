@@ -171,41 +171,43 @@ class PCBuilder:
             purpose=row['purpose'],
         )
 
-    def suggest_config(self, budget: float, purpose: str, top_n: int = 3) -> dict:
+    def suggest_config(self, budget: float, purpose: str, top_n: int = 5) -> dict:
         if purpose not in self.purpose_mapping:
             return {"error": f"Invalid purpose: {purpose}"}
 
         allowed = self.purpose_mapping[purpose]
 
-        def top_components(components, key, n):
-            return sorted(
-                [c for c in components if c.purpose in allowed[key]],
-                key=lambda x: x.performance_score / x.price,  # Tối ưu hiệu năng/giá
-                reverse=True
-            )[:n]
-
         # Nhóm linh kiện theo socket và ddr_type để giảm kiểm tra tương thích
         mb_by_socket = defaultdict(list)
-        ram_by_ddr = defaultdict(list)
         for mb in self.motherboards:
             if mb.purpose in allowed['motherboard']:
                 mb_by_socket[mb.socket].append(mb)
+
+        ram_by_ddr = defaultdict(list)
         for ram in self.rams:
             if ram.purpose in allowed['ram']:
                 ram_by_ddr[ram.ddr_type].append(ram)
 
-        # Lấy top linh kiện
-        top_cpus = top_components(self.cpus, 'cpu', top_n)
-        top_mbs = [mb for mb in top_components(self.motherboards, 'motherboard', top_n)
-                if any(cpu.socket == mb.socket for cpu in top_cpus)]
-        top_rams = [ram for ram in top_components(self.rams, 'ram', top_n)
-                    if any(ram.ddr_type in mb.memory_type for mb in top_mbs)]
-        top_storages = top_components(self.storages, 'storage', top_n)
-        top_gpus = top_components(self.gpus, 'gpu', top_n)
-        top_keyboards = top_components(self.keyboards, 'keyboard', top_n)
-        top_mice = top_components(self.mice, 'mouse', top_n)
+        def get_components(components, key, n, max_price):
+            return sorted(
+                [c for c in components if c.purpose in allowed[key] and c.price <= max_price],
+                key=lambda x: x.performance_score,  # Tối ưu hiệu năng
+                reverse=True
+            )[:n]
 
-        # Tối ưu hóa tổ hợp bằng cách nhóm theo socket và ddr_type
+        # Lọc linh kiện theo giá tối đa (dựa trên ngân sách chia đều)
+        max_component_price = budget / 5  # Giả sử chia đều cho 7 linh kiện, lấy lỏng hơn
+        top_cpus = get_components(self.cpus, 'cpu', top_n, max_component_price)
+        top_mbs = [mb for mb in get_components(self.motherboards, 'motherboard', top_n, max_component_price)
+                if any(cpu.socket == mb.socket for cpu in top_cpus)]
+        top_rams = [ram for ram in get_components(self.rams, 'ram', top_n, max_component_price)
+                    if any(ram.ddr_type in mb.memory_type for mb in top_mbs)]
+        top_storages = get_components(self.storages, 'storage', top_n, max_component_price)
+        top_gpus = get_components(self.gpus, 'gpu', top_n, max_component_price)
+        top_keyboards = get_components(self.keyboards, 'keyboard', top_n, max_component_price)
+        top_mice = get_components(self.mice, 'mouse', top_n, max_component_price)
+
+        # Tạo danh sách cấu hình hợp lệ
         best_configs = []
         for cpu in top_cpus:
             compatible_mbs = mb_by_socket[cpu.socket]
@@ -231,11 +233,18 @@ class PCBuilder:
                         "total_price": total_price, "total_performance_score": total_score
                     })
 
-        # Sắp xếp theo hiệu năng/giá và lấy cấu hình tốt nhất
+        # Xử lý khi không tìm được cấu hình
         if not best_configs:
             return {"error": "Không tìm được cấu hình hợp lệ trong ngân sách."}
 
-        best_config = max(best_configs, key=lambda x: x["total_performance_score"] / x["total_price"])
+        # Chọn cấu hình tốt nhất: ưu tiên hiệu năng cao, giá gần ngân sách
+        best_config = max(
+            best_configs,
+            key=lambda x: (
+                x["total_performance_score"],  # Ưu tiên hiệu năng cao nhất
+                -abs(x["total_price"] - budget)  # Giá càng gần ngân sách càng tốt
+            )
+        )
 
         # Trả về kết quả ngắn gọn
         return {
